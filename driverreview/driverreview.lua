@@ -750,7 +750,7 @@ end
 -- UI Components
 --------------------------------------------------------------------
 
--- Create the portrait frame 
+-- Create the portrait frame with animated 3D model support
 function DR:CreatePortraitFrame(parent)
     -- Create portrait frame
     local frame = CreateFrame("Frame", nil, parent, "BackdropTemplate")
@@ -763,7 +763,15 @@ function DR:CreatePortraitFrame(parent)
     })
     frame:SetBackdropColor(0, 0, 0, 0.7)
     
-    -- Portrait texture itself
+    -- Create a PlayerModel frame for 3D animated portraits
+    local portraitModel = CreateFrame("PlayerModel", nil, frame)
+    portraitModel:SetSize(64, 64)
+    portraitModel:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    -- Initially hide the model
+    portraitModel:Hide()
+    frame.portraitModel = portraitModel
+    
+    -- Portrait texture for fallback when model isn't available
     local portraitTexture = frame:CreateTexture(nil, "ARTWORK")
     portraitTexture:SetSize(64, 64)
     portraitTexture:SetPoint("CENTER", frame, "CENTER", 0, 0)
@@ -789,38 +797,70 @@ function DR:CreatePortraitFrame(parent)
     -- Methods
     function frame:UpdatePortrait(unit)
         if not unit or not UnitExists(unit) then
+            -- Fallback to static portrait
+            self.portraitModel:Hide()
+            self.portraitTexture:Show()
             self.portraitTexture:SetTexture("Interface\\CharacterFrame\\TempPortrait")
             self.allianceBorder:Hide()
             self.hordeBorder:Hide()
             return false
         end
         
-        -- Try to set portrait
-        local success = false
+        local useStaticFallback = true
         
-        -- Method 1: SetPortraitTexture
-        pcall(function()
-            SetPortraitTexture(self.portraitTexture, unit)
-            success = true
-        end)
-        
-        -- Method 2: Use class icon if player
-        if not success and UnitIsPlayer(unit) then
-            local _, class = UnitClass(unit)
-            if class and CLASS_ICON_TCOORDS[class] then
-                local coords = CLASS_ICON_TCOORDS[class]
-                self.portraitTexture:SetTexture("Interface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES")
-                self.portraitTexture:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
-                success = true
+        -- First try to set an animated 3D model if the unit is a player
+        if UnitIsPlayer(unit) then
+            -- Try to set up the 3D model
+            local success = pcall(function()
+                self.portraitModel:SetUnit(unit)
+                -- Use standing animation (0) instead of walking (4)
+                self.portraitModel:SetAnimation(0)
+                -- Set rotation to face forward (0 or MATH.PI for front-facing)
+                self.portraitModel:SetRotation(0)
+                -- Set position to center the model
+                self.portraitModel:SetPosition(0, 0, 0)
+                -- Adjust zoom and camera for a good headshot
+                self.portraitModel:SetPortraitZoom(1)
+                self.portraitModel:SetCamera(0)
+                self.portraitModel:SetFacing(0)
+                useStaticFallback = false
+            end)
+            
+            if success then
+                self.portraitModel:Show()
+                self.portraitTexture:Hide()
+                useStaticFallback = false
             end
         end
         
-        -- Method 3: Fallback
-        if not success then
-            if UnitIsPlayer(unit) then
-                self.portraitTexture:SetTexture("Interface\\CharacterFrame\\TempPortrait")
-            else
-                self.portraitTexture:SetTexture("Interface\\TARGETINGFRAME\\UI-TargetingFrame-Monster")
+        -- Fall back to static texture if model didn't work
+        if useStaticFallback then
+            self.portraitModel:Hide()
+            self.portraitTexture:Show()
+            
+            -- Try to set portrait texture
+            local success = pcall(function()
+                SetPortraitTexture(self.portraitTexture, unit)
+            end)
+            
+            -- Use class icon if player
+            if not success and UnitIsPlayer(unit) then
+                local _, class = UnitClass(unit)
+                if class and CLASS_ICON_TCOORDS[class] then
+                    local coords = CLASS_ICON_TCOORDS[class]
+                    self.portraitTexture:SetTexture("Interface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES")
+                    self.portraitTexture:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+                    success = true
+                end
+            end
+            
+            -- Final fallback
+            if not success then
+                if UnitIsPlayer(unit) then
+                    self.portraitTexture:SetTexture("Interface\\CharacterFrame\\TempPortrait")
+                else
+                    self.portraitTexture:SetTexture("Interface\\TARGETINGFRAME\\UI-TargetingFrame-Monster")
+                end
             end
         end
         
@@ -846,7 +886,26 @@ function DR:CreatePortraitFrame(parent)
         realm = realm or GetRealmName()
         local fullName = name .. "-" .. realm
         
-        -- Set a generic portrait
+        -- Always hide the 3D model for non-unit updates
+        self.portraitModel:Hide()
+        self.portraitTexture:Show()
+        
+        -- Try to find unit ID for this player (if they're in group)
+        local unitID = nil
+        local groupMembers = DR:GetGroupMembers()
+        for _, member in ipairs(groupMembers) do
+            if member.fullName == fullName then
+                unitID = member.unit
+                break
+            end
+        end
+        
+        -- If we found a unit ID, use that instead
+        if unitID and UnitExists(unitID) then
+            return self:UpdatePortrait(unitID)
+        end
+        
+        -- Otherwise continue with static portrait
         self.portraitTexture:SetTexture("Interface\\CharacterFrame\\TempPortrait")
         
         -- Try to set faction from cached data
